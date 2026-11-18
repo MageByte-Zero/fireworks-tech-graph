@@ -3,7 +3,23 @@
   "$id": "https://yizhiyanhua-ai.github.io/fireworks-tech-graph/schemas/diagram-v1.schema.json",
   "title": "Fireworks Tech Graph Diagram v1",
   "type": "object",
-  "required": ["schema_version", "mode", "nodes", "arrows"],
+  "required": ["schema_version", "mode"],
+  "oneOf": [
+    {
+      "required": ["nodes", "arrows"],
+      "not": { "anyOf": [{ "required": ["participants"] }, { "required": ["messages"] }] }
+    },
+    {
+      "required": ["participants", "messages"],
+      "properties": { "mode": { "const": "sequence" } },
+      "not": {
+        "anyOf": [
+          { "required": ["nodes"] }, { "required": ["arrows"] },
+          { "required": ["edges"] }, { "required": ["containers"] }
+        ]
+      }
+    }
+  ],
   "properties": {
     "schema_version": { "const": 1 },
     "mode": { "type": "string", "minLength": 1 },
@@ -80,6 +96,37 @@
     "legend_orientation": { "enum": ["vertical", "horizontal"] },
     "width": { "type": "number", "exclusiveMinimum": 0 },
     "height": { "type": "number", "exclusiveMinimum": 0 },
+    "participants": {
+      "type": "array",
+      "description": "Structured sequence participants arranged from left to right in array order.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "label"],
+        "properties": {
+          "id": { "$ref": "#/$defs/sequenceText" },
+          "label": { "$ref": "#/$defs/sequenceText" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "messages": {
+      "type": "array",
+      "description": "Structured sequence messages arranged from top to bottom in array order. Sources and targets reference participant IDs.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "source", "target", "kind", "label"],
+        "properties": {
+          "id": { "$ref": "#/$defs/sequenceText" },
+          "source": { "$ref": "#/$defs/sequenceText" },
+          "target": { "$ref": "#/$defs/sequenceText" },
+          "kind": { "enum": ["call", "return"] },
+          "label": { "$ref": "#/$defs/sequenceText" }
+        },
+        "additionalProperties": false
+      }
+    },
     "containers": {
       "type": "array",
       "items": {
@@ -169,6 +216,7 @@
     }
   },
   "$defs": {
+    "sequenceText": { "type": "string", "pattern": "\\S" },
     "goldenSignal": {
       "type": "object",
       "required": ["value", "unit", "window", "status"],

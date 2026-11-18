@@ -6,6 +6,7 @@ Historical `1.0.0` through `1.0.4` entries were reconstructed from the published
 
 ## Unreleased — quality upgrade
 
+- Add structured sequence input. Lay out lifelines and ordered call/return arrows automatically from participants and messages.
 - Configure arrow-label text size at diagram and arrow level. Measure the labels at their effective size for routing and collision checks.
 - Add native diamond decision nodes. Put branch conditions on the outgoing arrows so labels move with the route.
 - Reject non-SVG XML and invalid viewBoxes before layout; include generic arrow/node collisions in the default `check` contract.

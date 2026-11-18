@@ -48,6 +48,9 @@ For JSON work, select `text_policy: "strict"` when all labels must be visible ex
 The compatible `report` default preserves full labels in SVG metadata and reports
 any visible truncation. Resolve that warning before claiming complete exact text.
 For polished work apply the [composition contract](references/composition-quality-contract.md).
+For sequence diagrams, declare participants left to right and call/return messages
+in time order. Fireworks lays out the lifelines and arrows. See the [structured
+sequence example](references/diagram-layout-reference.md#sequence-diagram).
 For readable branch conditions, use a diamond node and label each outgoing arrow.
 Use `style_overrides.arrow_label_size` for the diagram or `arrows[].label_size` for
 one arrow. The layout checks the resulting label bounds along the routed arrow.

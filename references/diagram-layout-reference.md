@@ -43,12 +43,38 @@ Specialized agent diagram focused on memory operations.
 - Use stacked rects or layered cylinders for storage tiers
 
 ### Sequence Diagram
-Time-ordered message exchanges between participants.
-- Participants as vertical **lifelines** (top labels + vertical dashed lines)
-- Messages as horizontal arrows between lifelines, top-to-bottom time order
-- Activation boxes (thin filled rects on lifeline) show active processing
-- Group with `<rect>` loop/alt frames with label in top-left corner
-- ViewBox height = 80 + (num_messages × 50)
+
+Use structured input for calls and returns along a single execution path:
+
+```json
+{
+  "schema_version": 1,
+  "mode": "sequence",
+  "style": 1,
+  "title": "Read an order",
+  "participants": [
+    {"id": "client", "label": "Client"},
+    {"id": "api", "label": "Orders API"}
+  ],
+  "messages": [
+    {"id": "read", "source": "client", "target": "api", "kind": "call", "label": "GET /orders/42"},
+    {"id": "reply", "source": "api", "target": "client", "kind": "return", "label": "200 · order"}
+  ]
+}
+```
+
+Run `fireworks.py render sequence input.json diagram.svg --report layout.json`
+using the usual CLI. Participant order sets the lifelines from left to right.
+Message order sets the arrows from top to bottom, with solid calls and dashed
+returns. Give each participant and message a unique ID and reference the source
+and target participant explicitly, including on returns. A message to the same
+participant draws a loop. Fireworks sizes the canvas to fit the messages.
+Use `style_overrides.arrow_label_size` to change the message label size.
+Keep labels short and include evidence that explains what a later step consumes.
+
+Existing coordinate-based sequence sources remain valid. Use that input for
+manual layouts with activation boxes or alt/loop frames. Choose one input form
+per source.
 
 ### Comparison / Feature Matrix
 Side-by-side comparison of approaches, systems, or components.

@@ -78,6 +78,49 @@ def _validate_label_font_size(value: Any, path: str) -> None:
         raise DiagramValidationError(f"{path} must be a finite positive number")
 
 
+def _sequence_items(data: Mapping[str, Any], name: str, fields: Sequence[str]) -> list[dict[str, str]]:
+    items = data.get(name)
+    if not isinstance(items, list) or not items:
+        raise DiagramValidationError(f"{name} must be a non-empty array")
+    result: list[dict[str, str]] = []
+    for index, item in enumerate(items):
+        path = f"{name}[{index}]"
+        if not isinstance(item, Mapping):
+            raise DiagramValidationError(f"{path} must be an object")
+        unknown_fields = sorted(set(item) - set(fields))
+        if unknown_fields:
+            raise DiagramValidationError(f"{path} has unsupported fields: {', '.join(unknown_fields)}")
+        for field in fields:
+            if not isinstance(item.get(field), str) or not item[field].strip():
+                raise DiagramValidationError(f"{path}.{field} must be a non-empty string")
+        result.append(dict(item))
+    return result
+
+
+def _normalize_sequence(data: Mapping[str, Any]) -> dict[str, Any]:
+    if data["mode"] != "sequence":
+        raise DiagramValidationError("structured sequence input requires mode 'sequence'")
+    for field in ("nodes", "arrows", "edges", "containers"):
+        if field in data:
+            raise DiagramValidationError(f"structured sequence input cannot include {field}")
+    participants = _sequence_items(data, "participants", ("id", "label"))
+    messages = _sequence_items(data, "messages", ("id", "source", "target", "kind", "label"))
+    participant_ids = {item["id"] for item in participants}
+    if len(participant_ids) != len(participants):
+        raise DiagramValidationError("duplicate participant id")
+    if len({item["id"] for item in messages}) != len(messages):
+        raise DiagramValidationError("duplicate message id")
+    for index, message in enumerate(messages):
+        if message["kind"] not in {"call", "return"}:
+            raise DiagramValidationError(f"messages[{index}].kind must be call or return")
+        for endpoint in ("source", "target"):
+            if message[endpoint] not in participant_ids:
+                raise DiagramValidationError(
+                    f"messages[{index}].{endpoint} references unknown participant: {message[endpoint]}"
+                )
+    return {"participants": participants, "messages": messages}
+
+
 def normalize_diagram(data: Mapping[str, Any], expected_mode: str) -> DiagramIR:
     if not isinstance(data, Mapping):
         raise DiagramValidationError("diagram input must be a JSON object")
@@ -107,6 +150,13 @@ def normalize_diagram(data: Mapping[str, Any], expected_mode: str) -> DiagramIR:
     for field in ("width", "height"):
         if field in normalized and _finite(normalized[field], f"diagram.{field}") <= 0:
             raise DiagramValidationError(f"diagram.{field} must be greater than zero")
+
+    sequence = None
+    if "participants" in normalized or "messages" in normalized:
+        sequence = _normalize_sequence(normalized)
+        normalized["nodes"] = sequence["participants"]
+        normalized["arrows"] = sequence["messages"]
+        normalized.setdefault("semantic_profile", "generic")
 
     raw_containers = normalized.get("containers", [])
     if not isinstance(raw_containers, list):
@@ -198,6 +248,10 @@ def normalize_diagram(data: Mapping[str, Any], expected_mode: str) -> DiagramIR:
 
     style_index = resolve_style_index(normalized)
     semantic_report = validate_semantic_contract(normalized)
+    if sequence is not None:
+        semantic_report["sequence"] = sequence
+        for field in ("nodes", "arrows", "containers"):
+            del normalized[field]
     return DiagramIR(
         1,
         input_schema,

@@ -2909,6 +2909,7 @@ def render_arrow(
     *,
     existing_routes: Sequence[Sequence[Point]],
     canvas_bounds: Bounds,
+    sequence_route: Optional[Sequence[Point]] = None,
 ) -> ArrowRender:
     edge_id = str(arrow.get("_edge_id") or "edge")
     edge_dom_id = str(arrow.get("_edge_dom_id") or safe_identifier(edge_id, "edge"))
@@ -2951,14 +2952,19 @@ def render_arrow(
         routing_data["source_port"] = source_port
     if target_port:
         routing_data["target_port"] = target_port
-    route = build_orthogonal_route(
-        start,
-        end,
-        obstacles,
-        routing_data,
-        canvas_bounds=canvas_bounds,
-        existing_routes=existing_routes,
-    )
+    if sequence_route is not None:
+        route = list(sequence_route)
+        if route_collides(route, obstacles):
+            raise ValueError(f"sequence message {edge_id} intersects reserved content")
+    else:
+        route = build_orthogonal_route(
+            start,
+            end,
+            obstacles,
+            routing_data,
+            canvas_bounds=canvas_bounds,
+            existing_routes=existing_routes,
+        )
     if source_node is not None and source_node.shape == "diamond":
         start = diamond_outline_anchor(source_node, start)
     if target_node is not None and target_node.shape == "diamond":
@@ -3010,6 +3016,8 @@ def render_arrow(
         f'data-critical-hops="{normalize_attribute(critical_hops)}" '
         f'data-critical="{critical}" data-bends="{bends}" data-route-stretch="{round(stretch, 3)}"'
     )
+    if sequence_route is not None:
+        shared_attributes += f' data-message-kind="{arrow["kind"]}"'
     rendered_paths: List[str] = []
     if bridges:
         background = str(style_value(style, "background"))
@@ -3098,7 +3106,7 @@ def render_arrow(
             # Legacy C4 placement used a one-line proxy. Preserve unchanged SVGs.
             placement_dimensions = max(label_badge_size(label), label_badge_size(secondary_label))
         label_routes = existing_routes
-        if font_size is not None and not secondary_label and label_style == "offset":
+        if sequence_route is not None or (font_size is not None and not secondary_label and label_style == "offset"):
             label_routes = [*existing_routes, route]
         label_x, label_y = choose_label_position_avoiding(
             route,
@@ -3140,6 +3148,8 @@ def render_arrow(
         "crossings": [[round(x, 2), round(y, 2)] for x, y in interactions.crossings],
         "bridges": [[round(x, 2), round(y, 2)] for x, y in bridges],
     }
+    if sequence_route is not None:
+        report["message_kind"] = arrow["kind"]
     return ArrowRender(edge_id, "\n".join(rendered_paths), label_svg, label_bounds, route, report)
 
 
@@ -3200,6 +3210,96 @@ def bounds_metadata(bounds: Bounds) -> str:
     return ",".join(geometry.format_number(value) for value in bounds)
 
 
+def layout_sequence(
+    sequence: Dict[str, list[dict[str, str]]],
+    data: Dict[str, object],
+    style: Dict[str, object],
+    composition: quality.CompositionContract,
+    width: float,
+    height: float,
+) -> tuple[float, float, list[dict[str, object]], list[dict[str, object]], dict[str, list[Point]], float]:
+    participants = sequence["participants"]
+    messages = sequence["messages"]
+    columns = {participant["id"]: index for index, participant in enumerate(participants)}
+    label_size = float(style.get("arrow_label_size", 20))
+    title_size = 22
+    font_families = str(style_value(style, "font_family")).lower().split(",")
+    glyph_em = 0.61 if any(family.strip() == "monospace" for family in font_families) else 0.0
+    card_widths = [
+        max(88, math.ceil(geometry.estimate_text_width(item["label"], title_size, min_glyph_em=glyph_em) + 32))
+        for item in participants
+    ]
+    gaps = [max(112, (left + right) / 2 + max(24, composition.min_node_gap))
+            for left, right in zip(card_widths, card_widths[1:])]
+    loop_widths: dict[str, float] = {}
+    right_edge = card_widths[-1] / 2
+    for message in messages:
+        left, right = sorted((columns[message["source"]], columns[message["target"]]))
+        badge_width, _ = label_badge_size(message["label"].strip(), font_size=label_size, min_glyph_em=glyph_em)
+        if left == right:
+            loop_width = max(60, math.ceil(badge_width + 16))
+            loop_widths[message["id"]] = loop_width
+            if right == len(gaps):
+                right_edge = max(right_edge, loop_width)
+            else:
+                gaps[right] = max(gaps[right], loop_width + 16)
+        else:
+            extra_per_gap = max(0, badge_width + 12 - sum(gaps[left:right])) / (right - left)
+            for index in range(left, right):
+                gaps[index] += extra_per_gap
+
+    margin = 26
+    timeline_width = card_widths[0] / 2 + sum(gaps) + right_edge
+    title_space = 2 * (48 if style_value(style, "title_align") == "left" else margin)
+    width = math.ceil(max(
+        width, timeline_width + 2 * margin,
+        geometry.estimate_text_width(str(data.get("title", "Diagram")), float(style_value(style, "title_size"))) + title_space,
+        geometry.estimate_text_width(str(data.get("subtitle", "")), float(style_value(style, "subtitle_size"))) + title_space,
+    ))
+    center = (width - timeline_width) / 2 + card_widths[0] / 2
+    centers = [round(center, 2)]
+    for gap in gaps:
+        center += gap
+        centers.append(round(center, 2))
+
+    _, header_y = render_title_block(style, data, width)
+    header_height = 42
+    nodes = [
+        {**item, "x": x - card_width / 2, "y": header_y, "width": card_width, "height": header_height,
+         "title_size": title_size, "flat": True}
+        for item, x, card_width in zip(participants, centers, card_widths)
+    ]
+    row_height = max(54, math.ceil(label_size + 32))
+    y = header_y + header_height + row_height
+    arrows = []
+    routes = {}
+    for message in messages:
+        source_x = centers[columns[message["source"]]]
+        target_x = centers[columns[message["target"]]]
+        loop_width = loop_widths.get(message["id"])
+        end_y = y
+        if loop_width is None:
+            routes[message["id"]] = [(source_x, y), (target_x, y)]
+        else:
+            end_y += max(28, math.ceil(loop_width / 1.8))
+            loop_x = source_x + loop_width
+            routes[message["id"]] = [(source_x, y), (loop_x, y), (loop_x, end_y), (target_x, end_y)]
+        is_return = message["kind"] == "return"
+        arrows.append({**message, "x1": source_x, "y1": y, "x2": target_x, "y2": end_y,
+                       "dashed": is_return, "flow": "neutral" if is_return else "control",
+                       "label_size": label_size, "label_dy": 0})
+        y = end_y + row_height
+
+    lifeline_bottom = y - row_height + 22
+    footer_space = 44 if data.get("footer") else margin
+    if data.get("legend"):
+        footer_space += 102 + 22 * len(data["legend"])
+    if style.get("_style_index") == 3 and data.get("blueprint_title_block"):
+        footer_space += 38 + to_float(data["blueprint_title_block"].get("height", 92))
+    height = math.ceil(max(height, lifeline_bottom + footer_space))
+    return width, height, nodes, arrows, routes, lifeline_bottom
+
+
 def build_svg_with_report(template_type: str, data: Dict[str, object]) -> Tuple[str, Dict[str, object]]:
     diagram = normalize_diagram(data, template_type)
     source_data = diagram.as_dict()
@@ -3216,17 +3316,23 @@ def build_svg_with_report(template_type: str, data: Dict[str, object]) -> Tuple[
     )
     if source_data.get("style_overrides"):
         style.update(source_data["style_overrides"])
-    width, height = parse_template_viewbox(template_type)
+    sequence = diagram.semantic_report.get("sequence")
+    width, height = (0.0, 0.0) if sequence is not None else parse_template_viewbox(template_type)
     width = to_float(source_data.get("width", width))
     height = to_float(source_data.get("height", height))
     if source_data.get("viewBox"):
         _, _, width, height = parse_viewbox(source_data["viewBox"])
-    if not math.isfinite(width) or not math.isfinite(height) or width <= 0 or height <= 0:
-        raise ValueError("canvas width and height must be finite positive numbers")
-
     containers = list(source_data.get("containers", []))
     nodes_data = list(source_data.get("nodes", []))
     arrows_data = list(source_data.get("arrows", []))
+    sequence_routes = {}
+    if sequence is not None:
+        width, height, nodes_data, arrows_data, sequence_routes, lifeline_bottom = layout_sequence(
+            sequence, source_data, style, composition_contract, width, height,
+        )
+    if not math.isfinite(width) or not math.isfinite(height) or width <= 0 or height <= 0:
+        raise ValueError("canvas width and height must be finite positive numbers")
+
     legend = list(source_data.get("legend", []))
 
     if style_index == 9:
@@ -3283,6 +3389,9 @@ def build_svg_with_report(template_type: str, data: Dict[str, object]) -> Tuple[
         placement_obstacles.append(footer_reserved[2])
     if blueprint_block_bounds:
         placement_obstacles.append(blueprint_block_bounds)
+    if sequence is not None:
+        placement_obstacles.append((0.0, content_start_y, width, lifeline_bottom))
+    arrow_nodes = {} if sequence is not None else node_map
     legend_placement = resolve_legend_layout(
         source_data,
         legend,
@@ -3290,7 +3399,7 @@ def build_svg_with_report(template_type: str, data: Dict[str, object]) -> Tuple[
         height,
         placement_obstacles,
         arrows_data,
-        node_map,
+        arrow_nodes,
     )
     legend_reserved = legend_layout(source_data, legend, width, height)
 
@@ -3304,7 +3413,7 @@ def build_svg_with_report(template_type: str, data: Dict[str, object]) -> Tuple[
 
     route_obstacles = node_obstacles + reserved_bounds
     label_obstacles = node_obstacles + reserved_bounds
-    prepared_arrows = prepare_arrows(arrows_data, node_map)
+    prepared_arrows = prepare_arrows(arrows_data, arrow_nodes)
     rendered_by_index: Dict[int, ArrowRender] = {}
     existing_routes: List[Sequence[Point]] = []
     routing_order = sorted(
@@ -3316,11 +3425,12 @@ def build_svg_with_report(template_type: str, data: Dict[str, object]) -> Tuple[
         rendered = render_arrow(
             prepared_arrows[index],
             style,
-            node_map,
+            arrow_nodes,
             route_obstacles,
             label_obstacles,
             existing_routes=existing_routes,
             canvas_bounds=(0.0, 0.0, width, height),
+            sequence_route=sequence_routes.get(prepared_arrows[index]["_edge_id"]),
         )
         rendered_by_index[index] = rendered
         existing_routes.append(rendered.route)
@@ -3394,6 +3504,14 @@ def build_svg_with_report(template_type: str, data: Dict[str, object]) -> Tuple[
                 f'height="{geometry.format_number(header_bounds[3] - header_bounds[1])}" fill="none" stroke="none"/>'
             )
         lines.append("  </g>")
+
+    if sequence is not None:
+        for node in normalized_nodes:
+            lines.append(
+                f'  <line data-graph-role="lifeline" data-participant-id="{normalize_attribute(node.node_id)}" '
+                f'x1="{node.cx:.2f}" y1="{node.bounds[3]:.2f}" x2="{node.cx:.2f}" y2="{lifeline_bottom:.2f}" '
+                f'stroke="{style_value(style, "text_muted")}" stroke-width="1.4" stroke-dasharray="4,5" opacity="0.65"/>'
+            )
 
     # A bridge is assigned to the edge routed after an existing edge. Preserve
     # that order in the SVG paint stack so the bridge mask erases the lower
