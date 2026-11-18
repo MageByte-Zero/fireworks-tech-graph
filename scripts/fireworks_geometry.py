@@ -226,22 +226,25 @@ def route_overlap_length(route: Sequence[Point], others: Sequence[Sequence[Point
     return route_interactions(route, others).overlap_length
 
 
-def estimate_text_width(text: str, font_size: float = 12.0, weight: float = 1.0) -> float:
+def estimate_text_width(
+    text: str, font_size: float = 12.0, weight: float = 1.0, *, min_glyph_em: float = 0.0
+) -> float:
     units = 0.0
     for character in text:
         if unicodedata.combining(character):
             continue
         east_asian = unicodedata.east_asian_width(character)
         if east_asian in {"W", "F"}:
-            units += 1.0
+            glyph_em = 1.0
         elif character.isspace():
-            units += 0.36
+            glyph_em = 0.36
         elif character in "ilI.,:;!'`|":
-            units += 0.32
+            glyph_em = 0.32
         elif character in "MW@#%&":
-            units += 0.82
+            glyph_em = 0.82
         else:
-            units += 0.58
+            glyph_em = 0.58
+        units += max(glyph_em, min_glyph_em)
     return max(font_size * 1.5, units * font_size * weight)
 
 

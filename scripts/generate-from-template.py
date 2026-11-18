@@ -1066,6 +1066,7 @@ def infer_shape(kind: str) -> str:
         "folder": "rect",
         "terminal": "rect",
         "hexagon": "rect",
+        "diamond": "diamond",
         "circle_cluster": "cluster",
         "user_avatar": "rect",
         "bot": "rect",
@@ -1084,6 +1085,8 @@ def node_bounds(data: Dict[str, object]) -> Bounds:
         return (x - r, y - r, x + r, y + r)
     width = to_float(data.get("width", 180))
     height = to_float(data.get("height", 76))
+    if kind == "diamond" and (width <= 0 or height <= 0):
+        raise ValueError("diamond width and height must be greater than zero")
     return (x, y, x + width, y + height)
 
 
@@ -1108,6 +1111,8 @@ def anchor_on_side(node: Node, side: str, offset: float = 0.0) -> Point:
     side = side.lower()
     safe_x = min(max(cx + offset, left + 12), right - 12)
     safe_y = min(max(cy + offset, top + 12), bottom - 12)
+    if node.shape == "diamond":
+        safe_x, safe_y = cx + offset, cy + offset
     if side == "left":
         return (left, safe_y)
     if side == "right":
@@ -1125,6 +1130,17 @@ def anchor_on_side(node: Node, side: str, offset: float = 0.0) -> Point:
     if side == "bottom-right":
         return (right, bottom)
     return (cx, cy)
+
+
+def diamond_outline_anchor(node: Node, routing_anchor: Point) -> Point:
+    """Project a cardinal routing anchor onto the sloping side along its lead."""
+
+    x, y = routing_anchor
+    left, top, right, bottom = node.bounds
+    half_width, half_height = (right - left) / 2, (bottom - top) / 2
+    if x in (left, right):
+        return (x - math.copysign(half_width * abs(y - node.cy) / half_height, x - node.cx), y)
+    return (x, y - math.copysign(half_height * abs(x - node.cx) / half_width, y - node.cy))
 
 
 def anchor_point(node: Node, toward: Point, port: Optional[str] = None, offset: float = 0.0) -> Point:
@@ -1630,14 +1646,41 @@ def marker_for_color(style: Dict[str, object], color: str, arrow_data: Dict[str,
     return "url(#arrowA)"
 
 
-def render_label_badge(x: float, y: float, text: str, style: Dict[str, object], label_style: str = "offset") -> str:
-    width = max(36.0, geometry.estimate_text_width(text, 12) + 14)
+def label_badge_size(
+    text: str, secondary: str = "", font_size: Optional[float] = None, *, min_glyph_em: float = 0.0
+) -> Point:
+    if not secondary:
+        size = 12 if font_size is None else font_size
+        return (max(36.0, geometry.estimate_text_width(text, size, min_glyph_em=min_glyph_em) + 14), size + 8)
+    scale = 1 if font_size is None else font_size / 12
+    primary_size = 11.5 if font_size is None else font_size
+    secondary_text = secondary if font_size is None else f"[{secondary}]"
+    width = max(
+        42.0,
+        geometry.estimate_text_width(text, primary_size, min_glyph_em=min_glyph_em) + 16,
+        geometry.estimate_text_width(secondary_text, 8.5 * scale, min_glyph_em=min_glyph_em) + 16,
+    )
+    return (width, 32 * scale)
+
+
+def render_label_badge(
+    x: float,
+    y: float,
+    text: str,
+    style: Dict[str, object],
+    label_style: str,
+    dimensions: Point,
+    font_size: Optional[float],
+) -> str:
+    width, height = dimensions
     parts: List[str] = []
     if label_style == "badge":
         bg = style_value(style, "arrow_label_bg")
         opacity = style_value(style, "arrow_label_opacity")
-        parts.append(f'  <rect x="{round(x - width / 2, 2)}" y="{round(y - 10, 2)}" width="{width}" height="20" rx="6" fill="{bg}" opacity="{opacity}"/>')
-    parts.append(f'  <text x="{round(x, 2)}" y="{round(y + 4, 2)}" text-anchor="middle" class="arrow-label">{normalize_text(text)}</text>')
+        parts.append(f'  <rect x="{round(x - width / 2, 2)}" y="{round(y - height / 2, 2)}" width="{width}" height="{geometry.format_number(height)}" rx="6" fill="{bg}" opacity="{opacity}"/>')
+    baseline = 4 if font_size is None else font_size / 3
+    typography = 'class="arrow-label"' if font_size is None else f'font-size="{font_size:g}"'
+    parts.append(f'  <text x="{round(x, 2)}" y="{round(y + baseline, 2)}" text-anchor="middle" {typography}>{normalize_text(text)}</text>')
     return "\n".join(parts)
 
 
@@ -1656,35 +1699,32 @@ def bounds_intersect(a: Bounds, b: Bounds, padding: float = 0.0) -> bool:
     )
 
 
-def estimate_label_bounds(x: float, y: float, text: str) -> Bounds:
-    width = max(36.0, geometry.estimate_text_width(text, 12) + 14)
-    return rectangle_bounds(x - width / 2, y - 10, width, 20)
-
-
-def render_dual_label_badge(x: float, y: float, primary: str, secondary: str, style: Dict[str, object]) -> str:
-    width = max(
-        42.0,
-        geometry.estimate_text_width(primary, 11.5) + 16,
-        geometry.estimate_text_width(secondary, 8.5) + 16,
-    )
+def render_dual_label_badge(
+    x: float,
+    y: float,
+    primary: str,
+    secondary: str,
+    style: Dict[str, object],
+    dimensions: Point,
+    font_size: Optional[float],
+) -> str:
+    width, height = dimensions
+    scale = 1 if font_size is None else font_size / 12
+    primary_font = 'class="arrow-label" font-size="11.5"' if font_size is None else f'font-size="{font_size:g}"'
     bg = style_value(style, "arrow_label_bg")
     opacity = style_value(style, "arrow_label_opacity")
     return "\n".join(
         [
-            f'  <rect x="{round(x - width / 2, 2)}" y="{round(y - 16, 2)}" width="{round(width, 2)}" height="32" rx="7" fill="{bg}" opacity="{opacity}"/>',
-            f'  <text x="{round(x, 2)}" y="{round(y - 1, 2)}" text-anchor="middle" class="arrow-label" font-size="11.5">{normalize_text(primary)}</text>',
-            f'  <text x="{round(x, 2)}" y="{round(y + 11, 2)}" text-anchor="middle" font-size="8.5" font-weight="800" fill="{style_value(style, "type_label_fill")}">[{normalize_text(secondary)}]</text>',
+            f'  <rect x="{round(x - width / 2, 2)}" y="{round(y - height / 2, 2)}" width="{round(width, 2)}" height="{geometry.format_number(height)}" rx="7" fill="{bg}" opacity="{opacity}"/>',
+            f'  <text x="{round(x, 2)}" y="{round(y - scale, 2)}" text-anchor="middle" {primary_font}>{normalize_text(primary)}</text>',
+            f'  <text x="{round(x, 2)}" y="{round(y + 11 * scale, 2)}" text-anchor="middle" font-size="{8.5 * scale:g}" font-weight="800" fill="{style_value(style, "type_label_fill")}">[{normalize_text(secondary)}]</text>',
         ]
     )
 
 
-def estimate_dual_label_bounds(x: float, y: float, primary: str, secondary: str) -> Bounds:
-    width = max(
-        42.0,
-        geometry.estimate_text_width(primary, 11.5) + 16,
-        geometry.estimate_text_width(secondary, 8.5) + 16,
-    )
-    return rectangle_bounds(x - width / 2, y - 16, width, 32)
+def label_bounds_at(x: float, y: float, dimensions: Point) -> Bounds:
+    width, height = dimensions
+    return rectangle_bounds(x - width / 2, y - height / 2, width, height)
 
 
 def section_header_text(container: Dict[str, object], style: Dict[str, object]) -> str:
@@ -1813,24 +1853,23 @@ def container_header_bounds(container: Dict[str, object], style: Optional[Dict[s
     return rectangle_bounds(x + 8, y + 6, reserved_width, header_height)
 
 
-def label_position_candidates(points: Sequence[Point], text: str = "") -> List[Point]:
+def label_position_candidates(
+    points: Sequence[Point], dimensions: Point, *, allow_short_segments: bool = False
+) -> List[Point]:
     segments = list(zip(points, points[1:]))
     if not segments:
         return [points[0]]
-    ranked_segments = sorted(
-        segments,
-        key=lambda seg: abs(seg[0][0] - seg[1][0]) + abs(seg[0][1] - seg[1][1]),
-        reverse=True,
-    )
+    long_segments = [segment for segment in segments if route_length(segment) >= 34]
+    if long_segments or not allow_short_segments:
+        segments = long_segments
+    ranked_segments = sorted(segments, key=route_length, reverse=True)
     candidates: List[Point] = []
-    horizontal_offset = 17.0
-    vertical_offset = max(22.0, geometry.estimate_text_width(text, 12) / 2 + 10)
+    width, height = dimensions
+    horizontal_offset = height / 2 + 7
+    vertical_offset = max(22.0, (width - 14) / 2 + 10)
     global_x = (min(point[0] for point in points) + max(point[0] for point in points)) / 2
     global_y = (min(point[1] for point in points) + max(point[1] for point in points)) / 2
     for (x1, y1), (x2, y2) in ranked_segments:
-        length = abs(x1 - x2) + abs(y1 - y2)
-        if length < 34:
-            continue
         centers = [
             ((x1 + x2) / 2, (y1 + y2) / 2),
             (x1 * 0.7 + x2 * 0.3, y1 * 0.7 + y2 * 0.3),
@@ -1838,13 +1877,13 @@ def label_position_candidates(points: Sequence[Point], text: str = "") -> List[P
         ]
         for mx, my in centers:
             if abs(y1 - y2) < 1e-6:
-                candidates.extend([(mx, my - horizontal_offset), (mx, my + horizontal_offset), (mx, my - 30), (mx, my + 30), (mx, my)])
+                candidates.extend([(mx, my - horizontal_offset), (mx, my + horizontal_offset), (mx, my - horizontal_offset - 13), (mx, my + horizontal_offset + 13), (mx, my)])
                 candidates.extend([(global_x, my - horizontal_offset), (global_x, my + horizontal_offset)])
             elif abs(x1 - x2) < 1e-6:
                 candidates.extend([(mx - vertical_offset, my), (mx + vertical_offset, my), (mx - vertical_offset - 14, my), (mx + vertical_offset + 14, my), (mx, my)])
                 candidates.extend([(mx - vertical_offset, global_y), (mx + vertical_offset, global_y)])
             else:
-                candidates.extend([(mx, my - 16), (mx, my + 16), (mx, my)])
+                candidates.extend([(mx, my - horizontal_offset + 1), (mx, my + horizontal_offset - 1), (mx, my)])
     return candidates or [choose_label_position(points)]
 
 
@@ -1862,12 +1901,14 @@ def route_clearance_bounds(points: Sequence[Point], padding: float = 3.0) -> Lis
 def choose_label_position_avoiding(
     points: Sequence[Point],
     text: str,
+    dimensions: Point,
     occupied: Sequence[Bounds],
     *,
     routes: Sequence[Sequence[Point]] = (),
     canvas_bounds: Optional[Bounds] = None,
     dx: float = 0.0,
     dy: float = -4.0,
+    allow_short_segments: bool = False,
 ) -> Point:
     route_bounds = [bounds for route in routes for bounds in route_clearance_bounds(route)]
     offset_options = [
@@ -1881,10 +1922,10 @@ def choose_label_position_avoiding(
         (-32.0, 0.0),
         (32.0, 0.0),
     ]
-    for candidate in label_position_candidates(points, text):
+    for candidate in label_position_candidates(points, dimensions, allow_short_segments=allow_short_segments):
         for offset_x, offset_y in offset_options:
             adjusted = (candidate[0] + offset_x, candidate[1] + offset_y)
-            label_box = estimate_label_bounds(adjusted[0], adjusted[1], text)
+            label_box = label_bounds_at(adjusted[0], adjusted[1], dimensions)
             if canvas_bounds is not None and not geometry.bounds_inside(label_box, canvas_bounds, 4):
                 continue
             if any(bounds_intersect(label_box, other, 4) for other in occupied):
@@ -2457,6 +2498,94 @@ def render_special_node(node: Dict[str, object], style: Dict[str, object], kind:
     return None
 
 
+def render_diamond_text(node: Dict[str, object], style: Dict[str, object], stroke_width: float) -> List[str]:
+    left, top, right, bottom = node_bounds(node)
+    cx, cy = (left + right) / 2, (top + bottom) / 2
+    width, height = right - left, bottom - top
+    type_size = to_float(style_value(style, "type_label_size"))
+    row_specs = [
+        ("type_label", "type", f'fill="{style_value(style, "type_label_fill")}" font-weight="700"', type_size, 8.0),
+        ("label", "title", 'class="node-title"', to_float(node.get("title_size"), 18), 12.0),
+        ("sublabel", "subtitle", 'class="node-sub"', 12.0, 10.5),
+    ]
+    rows = [
+        (str(node[field]), role, appearance, preferred, min(preferred, minimum))
+        for field, role, appearance, preferred, minimum in row_specs
+        if str(node.get(field) or "").strip()
+    ]
+    for _, role, _, preferred, _ in rows:
+        if not math.isfinite(preferred) or preferred <= 0:
+            raise ValueError(f'diamond {node["id"]} requires a finite positive {role} font size')
+    gap = 3.0
+    padding = 4 + stroke_width / 2
+    preferred_sizes = [preferred for _, _, _, preferred, _ in rows]
+    minimum_sizes = [minimum for _, _, _, _, minimum in rows]
+    visible_widths = [
+        geometry.estimate_text_width(" ".join(raw.split()), 1, weight=1.08)
+        for raw, _, _, _, _ in rows
+    ]
+
+    def centered_rows(sizes: Sequence[float]) -> List[Tuple[float, float]]:
+        heights = [size * 1.06 for size in sizes]
+        block_height = sum(heights) + gap * max(0, len(rows) - 1)
+        cursor = cy - block_height / 2
+        positions = []
+        for row_height in heights:
+            row_center = cursor + row_height / 2
+            # The narrowest part of the diamond across this line determines its width.
+            farthest_y = abs(row_center - cy) + row_height / 2 + padding
+            budget = width * (1 - 2 * farthest_y / height) - 2 * padding
+            positions.append((row_center, budget))
+            cursor += row_height + gap
+        return positions
+
+    def fits(positions: Sequence[Tuple[float, float]], sizes: Sequence[float]) -> bool:
+        return all(
+            unit_width * size <= budget
+            for unit_width, size, (_, budget) in zip(visible_widths, sizes, positions)
+        )
+
+    sizes = preferred_sizes
+    positions = centered_rows(sizes)
+    if not fits(positions, minimum_sizes):
+        compact = centered_rows(minimum_sizes)
+        if fits(compact, minimum_sizes):
+            # Find a readable complete layout before falling back to ellipses.
+            sizes, positions = minimum_sizes, compact
+            upper_sizes = [min(size, height) for size in preferred_sizes]
+            low, high = 0.0, 1.0
+            for _ in range(12):
+                scale = (low + high) / 2
+                trial = [
+                    round(minimum + (upper - minimum) * scale, 2)
+                    for minimum, upper in zip(minimum_sizes, upper_sizes)
+                ]
+                trial_positions = centered_rows(trial)
+                if fits(trial_positions, trial):
+                    low = scale
+                    sizes, positions = trial, trial_positions
+                else:
+                    high = scale
+        elif any(
+            geometry.estimate_text_width("…", size, weight=1.08) > budget
+            for size, (_, budget) in zip(minimum_sizes, positions)
+        ):
+            sizes, positions = minimum_sizes, compact
+
+    lines = []
+    for (raw_text, role, appearance, _, minimum), preferred, (row_center, budget) in zip(rows, sizes, positions):
+        fitted, size = fit_single_line_text(raw_text, budget, preferred=preferred, minimum=minimum)
+        if geometry.estimate_text_width(fitted, size, weight=1.08) > budget:
+            raise ValueError(f'TEXT_FIT: diamond {node["id"]} is too small for {role} text')
+        baseline = row_center + size * 0.29
+        lines.append(
+            f'  <text data-text-role="{role}" data-full-text="{normalize_attribute(raw_text)}" '
+            f'data-text-max-width="{budget}" x="{cx}" y="{baseline}" text-anchor="middle" {appearance} '
+            f'font-size="{size}">{normalize_text(fitted)}</text>'
+        )
+    return lines
+
+
 def render_rect_node(node: Dict[str, object], style: Dict[str, object], kind: str) -> str:
     special = render_special_node(node, style, kind)
     if special is not None:
@@ -2492,6 +2621,16 @@ def render_rect_node(node: Dict[str, object], style: Dict[str, object], kind: st
     type_label = normalize_text(node.get("type_label", ""))
     accent_fill = node.get("accent_fill")
     lines = []
+
+    if kind == "diamond":
+        cx, cy = x + width / 2, y + height / 2
+        points = f"{cx},{y} {x + width},{cy} {cx},{y + height} {x},{cy}"
+        lines.append(
+            f'  <polygon points="{points}" fill="{fill}" stroke="{stroke}" stroke-width="{stroke_width}" '
+            f'stroke-linejoin="round"{filter_attr}/>'
+        )
+        lines.extend(render_diamond_text(node, style, stroke_width))
+        return "\n".join(lines)
 
     if kind == "double_rect":
         lines.append(
@@ -2743,10 +2882,15 @@ def prepare_arrows(arrows: Sequence[Dict[str, object]], node_map: Dict[str, Node
 
     for (node_id, port), endpoints in sorted(endpoint_groups.items()):
         node = node_map[node_id]
+        if node.shape == "diamond" and not port_axis(port):
+            raise ValueError(f"diamond {node_id} requires a top, right, bottom or left port; got {port!r}")
         span = (node.bounds[3] - node.bounds[1]) if port in {"left", "right"} else (node.bounds[2] - node.bounds[0])
         ordered = sorted(endpoints, key=lambda item: item[2])
         count = len(ordered)
         usable_span = max(0.0, span - 24.0)
+        if node.shape == "diamond":
+            # Leave a gap between leads from perpendicular sides in each corner.
+            usable_span = min(usable_span, span * 0.45)
         if count > 1 and usable_span / (count - 1) < 6.0:
             raise ValueError(f"PORT_CAPACITY: {node_id}.{port} cannot fit {count} distinct endpoints")
         spacing = 0.0 if count <= 1 else min(18.0, usable_span / (count - 1))
@@ -2815,6 +2959,16 @@ def render_arrow(
         canvas_bounds=canvas_bounds,
         existing_routes=existing_routes,
     )
+    if source_node is not None and source_node.shape == "diamond":
+        start = diamond_outline_anchor(source_node, start)
+    if target_node is not None and target_node.shape == "diamond":
+        end = diamond_outline_anchor(target_node, end)
+    if (source_node is not None and source_node.shape == "diamond") or (
+        target_node is not None and target_node.shape == "diamond"
+    ):
+        # The router reserves the full box. Extend the straight leads to the outline.
+        waypoints = [tuple(point) for point in arrow.get("route_points", [])]
+        route = simplify_points([start, *route, end], waypoints)
     interactions = geometry.route_interactions(route, existing_routes)
     if interactions.overlap_count:
         raise ValueError(f"edge {edge_id} has an unresolved collinear overlap")
@@ -2933,26 +3087,39 @@ def render_arrow(
     if style_index == 10 and not label and via.strip():
         label = via.strip()
     if label:
-        label_proxy = label
-        if secondary_label and geometry.estimate_text_width(secondary_label, 12) > geometry.estimate_text_width(label, 12):
-            label_proxy = secondary_label
+        configured_size = arrow.get("label_size", style.get("arrow_label_size"))
+        font_size = None if configured_size is None else float(configured_size)
+        label_style = str(arrow.get("label_style", "badge"))
+        font_families = str(style_value(style, "font_family")).lower().split(",")
+        monospace = font_size is not None and any(family.strip() == "monospace" for family in font_families)
+        dimensions = label_badge_size(label, secondary_label, font_size, min_glyph_em=0.61 if monospace else 0.0)
+        placement_dimensions = dimensions
+        if secondary_label and font_size is None:
+            # Legacy C4 placement used a one-line proxy. Preserve unchanged SVGs.
+            placement_dimensions = max(label_badge_size(label), label_badge_size(secondary_label))
+        label_routes = existing_routes
+        if font_size is not None and not secondary_label and label_style == "offset":
+            label_routes = [*existing_routes, route]
         label_x, label_y = choose_label_position_avoiding(
             route,
-            label_proxy,
+            label,
+            placement_dimensions,
             label_obstacles,
-            routes=existing_routes,
+            routes=label_routes,
             canvas_bounds=canvas_bounds,
             dx=to_float(arrow.get("label_dx", 0)),
             dy=to_float(arrow.get("label_dy", -4)),
+            allow_short_segments=font_size is not None,
         )
         if secondary_label:
-            label_content = render_dual_label_badge(label_x, label_y, label, secondary_label, style)
-            label_bounds = estimate_dual_label_bounds(label_x, label_y, label, secondary_label)
+            label_content = render_dual_label_badge(label_x, label_y, label, secondary_label, style, dimensions, font_size)
         else:
-            label_content = render_label_badge(label_x, label_y, label, style, label_style=str(arrow.get("label_style", "badge")))
-            label_bounds = estimate_label_bounds(label_x, label_y, label)
+            label_content = render_label_badge(label_x, label_y, label, style, label_style, dimensions, font_size)
+        label_bounds = label_bounds_at(label_x, label_y, dimensions)
+        # Configured labels inherit fill and weight while the text's font-size wins over the default.
+        label_class = ' class="arrow-label"' if font_size is not None else ""
         label_svg = (
-            f'  <g id="{normalize_attribute(edge_dom_id)}-label" data-graph-role="label" '
+            f'  <g id="{normalize_attribute(edge_dom_id)}-label" data-graph-role="label"{label_class} '
             f'data-owner="{normalize_attribute(edge_id)}" data-graph-bounds="'
             f'{geometry.format_number(label_bounds[0])},{geometry.format_number(label_bounds[1])},'
             f'{geometry.format_number(label_bounds[2])},{geometry.format_number(label_bounds[3])}">\n'
@@ -3235,6 +3402,7 @@ def build_svg_with_report(template_type: str, data: Dict[str, object]) -> Tuple[
 
     for node, node_data in zip(normalized_nodes, nodes_data):
         node_id = str(node_data.get("_dom_id") or f"node-{safe_identifier(node.node_id, 'node')}")
+        shape_attr = 'data-graph-shape="diamond" ' if node.shape == "diamond" else ""
         semantic_role = node_data.get(
             "c4_type",
             node_data.get("deployment_kind", node_data.get("transit_role", node_data.get("ops_role", node_data.get("kind", "node")))),
@@ -3255,6 +3423,7 @@ def build_svg_with_report(template_type: str, data: Dict[str, object]) -> Tuple[
             f'data-start-ms="{normalize_attribute(node_data.get("start_ms", ""))}" '
             f'data-duration-ms="{normalize_attribute(node_data.get("duration_ms", ""))}" '
             f'data-parent-span="{normalize_attribute(node_data.get("parent_span", ""))}" '
+            f'{shape_attr}'
             f'data-graph-bounds="{bounds_metadata(node.bounds)}">'
         )
         lines.append(render_node(node_data, style))

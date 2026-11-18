@@ -73,6 +73,11 @@ def _validate_numeric_fields(item: Mapping[str, Any], fields: Sequence[str], pat
             _finite(item[field], f"{path}.{field}")
 
 
+def _validate_label_font_size(value: Any, path: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or _finite(value, path) <= 0:
+        raise DiagramValidationError(f"{path} must be a finite positive number")
+
+
 def normalize_diagram(data: Mapping[str, Any], expected_mode: str) -> DiagramIR:
     if not isinstance(data, Mapping):
         raise DiagramValidationError("diagram input must be a JSON object")
@@ -90,6 +95,9 @@ def normalize_diagram(data: Mapping[str, Any], expected_mode: str) -> DiagramIR:
 
     if normalized.get("text_policy", "report") not in {"report", "strict"}:
         raise DiagramValidationError("text_policy must be report or strict")
+    style_overrides = normalized.get("style_overrides")
+    if isinstance(style_overrides, Mapping) and "arrow_label_size" in style_overrides:
+        _validate_label_font_size(style_overrides["arrow_label_size"], "style_overrides.arrow_label_size")
     _validate_numeric_fields(normalized, ("width", "height"), "diagram")
     if "viewBox" in normalized:
         box = parse_viewbox(normalized["viewBox"])
@@ -168,6 +176,8 @@ def normalize_diagram(data: Mapping[str, Any], expected_mode: str) -> DiagramIR:
             ("x1", "y1", "x2", "y2", "label_dx", "label_dy", "routing_padding", "port_clearance"),
             f"arrows[{index}]",
         )
+        if "label_size" in edge:
+            _validate_label_font_size(edge["label_size"], f"arrows[{index}].label_size")
         raw_waypoints = edge.get("route_points", [])
         if not isinstance(raw_waypoints, list):
             raise DiagramValidationError(f"arrows[{index}].route_points must be an array")

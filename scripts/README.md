@@ -64,9 +64,11 @@ SVG 图表生成脚本，提供自动验证和 PNG 导出。
 - `containers[].side_label` - 左侧 layer label
 - `nodes[].kind` - 语义组件类型，例如 `double_rect`、`cylinder`、`document`、`terminal`、`circle_cluster`
 - `arrows[].flow` - 语义箭头类型，例如 `control`、`write`、`read`、`data`
+- `arrows[].label` / `arrows[].label_size` - 随走线摆放的边标签（也可写分支条件），可为单条箭头指定字号
 - `source_port` / `target_port` - 指定端口锚点
 - `route_points` / `corridor_x` / `corridor_y` - 控制复杂图的走线质量
 - `style_overrides` - 对现有 style 做局部覆盖
+- `style_overrides.arrow_label_size` - 为全图边标签指定字号（px），单条箭头的 `label_size` 优先
 - `window_controls` / `meta_*` - 顶部终端 chrome
 - `blueprint_title_block` - 工程蓝图右下角 title block
 

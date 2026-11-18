@@ -19,6 +19,13 @@
         { "type": "string", "minLength": 1 }
       ]
     },
+    "style_overrides": {
+      "type": "object",
+      "properties": {
+        "arrow_label_size": { "type": "number", "exclusiveMinimum": 0 }
+      },
+      "additionalProperties": true
+    },
     "diagram_type": { "type": "string", "minLength": 1 },
     "semantic_profile": {
       "enum": ["generic", "c4-review", "cloud-fabric", "event-transit", "ops-pulse"]
@@ -145,6 +152,7 @@
           "topic_id": { "type": "string", "minLength": 1 },
           "protocol": { "type": "string", "minLength": 1 },
           "via": { "type": "string", "minLength": 1 },
+          "label_size": { "type": "number", "exclusiveMinimum": 0 },
           "route_points": {
             "type": "array",
             "items": {

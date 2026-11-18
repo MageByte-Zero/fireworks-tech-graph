@@ -24,6 +24,128 @@ def load_module(name: str, path: Path):
 
 generator = load_module("fireworks_generator", ROOT / "scripts" / "generate-from-template.py")
 validator = load_module("fireworks_validator", ROOT / "scripts" / "validate_svg.py")
+interactive_html = load_module("fireworks_interactive_html", ROOT / "scripts" / "interactive_html.py")
+
+
+class ArrowLabelContractTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.diagram = {
+            "mode": "flowchart",
+            "style": 1,
+            "width": 640,
+            "height": 320,
+            "nodes": [
+                {"id": "check", "x": 20, "y": 90, "width": 100, "height": 60, "label": "Check"},
+                {"id": "allow", "x": 450, "y": 90, "width": 120, "height": 60, "label": "Allow"},
+            ],
+            "arrows": [
+                {"id": "allowed", "source": "check", "target": "allow", "label": "条件通过"},
+            ],
+        }
+        self.arrow = self.diagram["arrows"][0]
+
+    def render_label(self):
+        svg = generator.build_svg("flowchart", self.diagram)
+        root = ET.fromstring(svg)
+        self.assertEqual(validator.geometry_check(root), [])
+        group = next(element for element in root if element.get("data-owner") == "allowed" and element.get("data-graph-role") == "label")
+        bounds = tuple(map(float, group.get("data-graph-bounds").split(",")))
+        label_text = [element for element in group if element.tag.endswith("}text")]
+        return group, bounds, label_text
+
+    def test_arrow_font_size_uses_the_diagram_setting_and_edge_override(self) -> None:
+        self.diagram["style_overrides"] = {"arrow_label_size": 24}
+        _, _, (label,) = self.render_label()
+        self.assertEqual(label.get("font-size"), "24")
+        self.arrow["label_size"] = 19.5
+        _, _, (label,) = self.render_label()
+        self.assertEqual(label.get("font-size"), "19.5")
+
+    def test_configured_edge_label_can_export_to_offline_html(self) -> None:
+        self.arrow["label_size"] = 24
+        svg = generator.build_svg("flowchart", self.diagram)
+        offline_svg = ET.fromstring(interactive_html.sanitize_svg(svg))
+        label = next(element for element in offline_svg.iter() if element.text == "条件通过")
+        self.assertEqual(label.get("font-size"), "24")
+
+    def test_larger_badge_avoids_nodes_and_declares_its_rendered_size(self) -> None:
+        self.diagram["nodes"].append(
+            {"id": "nearby", "x": 175, "y": 10, "width": 230, "height": 68, "label": "Nearby"}
+        )
+        _, default_bounds, _ = self.render_label()
+        self.assertGreater(default_bounds[1], 78)
+        self.assertLess(default_bounds[3], 120)
+
+        self.arrow["label_size"] = 36
+        group, bounds, _ = self.render_label()
+        self.assertGreaterEqual(bounds[1], 82)
+        self.assertGreater(bounds[1] + bounds[3], default_bounds[1] + default_bounds[3])
+        badge = next(element for element in group if element.tag.endswith("}rect"))
+        self.assertGreater(float(badge.get("width")), 144.0)
+        self.assertEqual(float(badge.get("height")), bounds[3] - bounds[1])
+        self.assertEqual(float(badge.get("y")), bounds[1])
+
+    def test_offset_branch_label_follows_waypoints_at_its_effective_size(self) -> None:
+        self.arrow.update(label_size=28, label_style="offset", route_points=[[150, 235], [420, 235]])
+        group, bounds, (label,) = self.render_label()
+        self.assertEqual(label.text, "条件通过")
+        self.assertEqual(list(group), [label])
+        self.assertGreater(bounds[1], 170)
+        self.assertLess(bounds[3], 235)
+        self.assertGreater(bounds[2] - bounds[0], 112)
+
+    def test_sized_offset_label_stays_clear_of_a_short_connector(self) -> None:
+        self.diagram["nodes"] = []
+        self.diagram["height"] = 420
+        self.arrow.clear()
+        self.arrow.update(
+            id="allowed", x1=260, y1=210, x2=290, y2=210,
+            label="通过", label_size=24, label_style="offset",
+        )
+        _, bounds, (label,) = self.render_label()
+        self.assertEqual(label.get("font-size"), "24")
+        self.assertEqual(label.text, "通过")
+        self.assertLess(bounds[3], 210)
+        self.assertAlmostEqual((bounds[0] + bounds[2]) / 2, 275.0)
+
+    def test_sized_monospace_label_reserves_room_for_narrow_glyphs(self) -> None:
+        self.diagram.update(style=2, height=420)
+        self.diagram["nodes"] = [
+            {"id": "nearby", "x": 45, "y": 100, "width": 80, "height": 60, "label": "Nearby"}
+        ]
+        self.arrow.clear()
+        self.arrow.update(
+            id="allowed", x1=50, y1=170, x2=550, y2=170,
+            label="initialization_failed", label_size=32, routing_padding=0,
+        )
+        _, bounds, (label,) = self.render_label()
+        self.assertEqual(label.get("font-size"), "32")
+        self.assertGreaterEqual(bounds[2] - bounds[0], 420)
+
+    def test_c4_dual_badge_reserves_both_lines_at_the_configured_size(self) -> None:
+        self.diagram.update(style=9, semantic_profile="generic")
+        self.arrow.update(label_size=24, protocol="内部服务消息通道")
+        group, bounds, (primary, secondary) = self.render_label()
+        self.assertEqual(primary.get("font-size"), "24")
+        self.assertEqual(secondary.text, "[内部服务消息通道]")
+        self.assertEqual(float(secondary.get("font-size")), 17.0)
+        self.assertGreater(bounds[2] - bounds[0], 8 * 17)
+        badge = next(element for element in group if element.tag.endswith("}rect"))
+        self.assertGreater(float(badge.get("height")), 32)
+        self.assertEqual(float(badge.get("height")), bounds[3] - bounds[1])
+
+    def test_arrow_size_rejects_non_numeric_or_non_positive_settings(self) -> None:
+        for size in (0, -12, float("inf"), True, "large", None):
+            with self.subTest(size=size, setting="style_overrides.arrow_label_size"):
+                self.diagram["style_overrides"] = {"arrow_label_size": size}
+                with self.assertRaisesRegex(ValueError, r"style_overrides\.arrow_label_size"):
+                    generator.build_svg("flowchart", self.diagram)
+                del self.diagram["style_overrides"]
+            with self.subTest(size=size, setting="arrows[0].label_size"):
+                self.arrow["label_size"] = size
+                with self.assertRaisesRegex(ValueError, r"arrows\[0\]\.label_size"):
+                    generator.build_svg("flowchart", self.diagram)
+                del self.arrow["label_size"]
 
 
 class RouteContractTest(unittest.TestCase):
@@ -202,6 +324,110 @@ class RouteContractTest(unittest.TestCase):
         eval_group = next(element for element in root if element.get("id") == "node-eval")
         title = next(element for element in eval_group if "node-title" in element.get("class", ""))
         self.assertLess(float(title.get("font-size", "18")), 18.0)
+
+    def test_decision_diamond_labels_fit_inside_the_sloping_outline(self) -> None:
+        data = {
+            "style": 1,
+            "nodes": [
+                {"id": "decision", "kind": "diamond", "x": 100, "y": 100, "width": 160, "height": 76,
+                 "label": "是否需要人工复核当前请求", "sublabel": "审批规则和风险分类", "type_label": "REVIEW"},
+            ],
+        }
+        svg, report = generator.build_svg_with_report("flowchart", data)
+        root = ET.fromstring(svg)
+        node = next(element for element in root if element.get("data-node-id") == "decision")
+        polygon = next((element for element in node if element.tag.endswith("polygon")), None)
+        self.assertIsNotNone(polygon, "the decision should be a polygon")
+        corners = [tuple(map(float, pair.split(","))) for pair in polygon.get("points").split()]
+        self.assertEqual(corners, [(180, 100), (260, 138), (180, 176), (100, 138)])
+        labels = [element for element in node if element.tag.endswith("text")]
+        self.assertEqual({element.get("data-text-role") for element in labels}, {"type", "title", "subtitle"})
+        for label in labels:
+            x, y, size = (float(label.get(key)) for key in ("x", "y", "font-size"))
+            left, top, right, bottom = generator.geometry.estimate_text_bounds(
+                x, y, label.text or "", font_size=size, anchor="middle",
+            )
+            for corner_x in (left, right):
+                for corner_y in (top, bottom):
+                    self.assertLess(abs(corner_x - 180) / 80 + abs(corner_y - 138) / 38, 1)
+        self.assertFalse(report["typography"]["complete_text"])
+        with self.assertRaisesRegex(ValueError, "TEXT_FIT"):
+            generator.build_svg_with_report("flowchart", {**data, "text_policy": "strict"})
+
+    def test_decision_diamond_routes_attach_to_vertices_and_fan_on_its_outline(self) -> None:
+        data = {
+            "style": 1,
+            "width": 740,
+            "height": 620,
+            "nodes": [
+                {"id": "start", "x": 300, "y": 90, "width": 100, "height": 50, "label": "Start"},
+                {"id": "decision", "kind": "diamond", "x": 270, "y": 230, "width": 160, "height": 80,
+                 "label": "Check?"},
+                {"id": "left", "x": 50, "y": 245, "width": 100, "height": 50, "label": "Back"},
+                {"id": "low", "x": 300, "y": 420, "width": 100, "height": 50, "label": "Later"},
+                {"id": "upper-right", "x": 560, "y": 200, "width": 100, "height": 50, "label": "Accept"},
+                {"id": "lower-right", "x": 560, "y": 310, "width": 100, "height": 50, "label": "Reject"},
+            ],
+            "arrows": [
+                {"id": "enter", "source": "start", "target": "decision"},
+                {"id": "back", "source": "decision", "target": "left", "source_port": "left"},
+                {"id": "down", "source": "decision", "target": "low", "source_port": "bottom"},
+                {"id": "a-yes", "source": "decision", "target": "upper-right", "source_port": "right"},
+                {"id": "b-no", "source": "decision", "target": "lower-right", "source_port": "right"},
+            ],
+        }
+        svg, report = generator.build_svg_with_report("flowchart", data)
+        edges = {edge["id"]: edge for edge in report["edges"]}
+        self.assertEqual(edges["enter"]["target_port"], [350, 230])
+        self.assertEqual(edges["back"]["source_port"], [270, 270])
+        self.assertEqual(edges["down"]["source_port"], [350, 310])
+        for edge_id, expected in (("a-yes", [412, 261]), ("b-no", [412, 279])):
+            route = edges[edge_id]["route"]
+            self.assertEqual(route[0], expected)
+            self.assertGreater(route[1][0], expected[0])
+            self.assertEqual(route[1][1], expected[1])
+        self.assertEqual(validator.geometry_check(ET.fromstring(svg)), [])
+
+    def test_decision_diamond_geometry_rejects_a_connector_off_its_outline(self) -> None:
+        data = {
+            "style": 1,
+            "nodes": [{"id": "decision", "kind": "diamond", "x": 100, "y": 100, "width": 160, "height": 80}],
+            "arrows": [{"id": "exit", "source": "decision", "source_port": "right", "x2": 400, "y2": 140}],
+        }
+        svg, _ = generator.build_svg_with_report("flowchart", data)
+        root = ET.fromstring(svg)
+        edge = next(element for element in root if element.get("data-edge-id") == "exit")
+        for path, code in (("M 260,120 L 400,120", "edge_anchor:"),
+                           ("M 260,140 L 200,140 L 200,70 L 400,70", "edge_node:")):
+            with self.subTest(path=path):
+                edge.set("d", path)
+                self.assertTrue(any(item.startswith(code) for item in validator.geometry_check(root)))
+
+    def test_decision_diamond_rejects_an_unusable_title_font_size(self) -> None:
+        data = {"style": 1, "nodes": [{"kind": "diamond", "x": 30, "y": 80, "label": "Check?", "title_size": -1}]}
+        with self.assertRaisesRegex(ValueError, "font size"):
+            generator.build_svg_with_report("flowchart", data)
+
+    def test_decision_diamond_reflows_text_that_fits_at_smaller_sizes(self) -> None:
+        for height, fields, labels in (
+            (54, {"title_size": 48}, ["Check?"]),
+            (62, {"type_label": "A", "sublabel": "B"}, ["A", "Check?", "B"]),
+        ):
+            with self.subTest(height=height):
+                data = {
+                    "style": 1,
+                    "text_policy": "strict",
+                    "nodes": [{"id": "decision", "kind": "diamond", "x": 30, "y": 80,
+                               "width": 180, "height": height, "label": "Check?", **fields}],
+                }
+                svg, report = generator.build_svg_with_report("flowchart", data)
+                root = ET.fromstring(svg)
+                diamond = next(element for element in root if element.get("data-node-id") == "decision")
+                text = [element for element in diamond if element.tag.endswith("text")]
+                self.assertEqual([element.text for element in text], labels)
+                self.assertTrue(report["typography"]["complete_text"])
+                title = next(element for element in text if element.get("data-text-role") == "title")
+                self.assertGreater(float(title.get("font-size")), 12)
 
     def test_horizontal_legend_uses_one_shared_baseline(self) -> None:
         data = json.loads(

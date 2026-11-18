@@ -249,8 +249,11 @@ Available arrow override fields (in recommended order of use):
 | `routing_padding` | number (default: 24) | *(Advanced)* Adjust obstacle clearance for this arrow |
 | `port_clearance` | number | *(Advanced)* Adjust first-segment offset from node edge |
 | `label_style` | `"badge"` / `"offset"` | Choose `"offset"` when badge backgrounds create visual clutter; keep `"badge"` (default) for legacy/high-contrast labels |
+| `label_size` | positive number in px | Override the diagram's arrow-label font size for this edge |
 
 For JSON/template rendering, the default remains `"badge"` for backward compatibility. Set `"label_style": "offset"` on individual arrows when you want offset-first labels without background rects.
+
+Set `"style_overrides": { "arrow_label_size": 18 }` to size labels across the diagram, or use `arrows[].label_size` for one edge. Ordinary arrow labels default to 12 px. Keep branch conditions in `arrows[].label` so they follow the connector when the route changes. The renderer reserves space for the chosen size during placement and geometry checks. C4 protocol badges also resize the second line.
 
 Optimization steps:
 1. Read the existing SVG — identify which arrows overlap, cross nodes, or look misaligned

@@ -112,6 +112,15 @@
 ```
 
 ### Decision Diamond (flowcharts)
+
+In structured input, set `kind` to `diamond`. The `x`, `y`, `width` and `height` describe the bounding rectangle. The renderer centers `label` and any `type_label` or `sublabel` inside the sloping sides. Widen or enlarge the diamond to fit longer text, and use `text_policy: "strict"` to reject truncation.
+
+Connect edges through `top`, `right`, `bottom` or `left`. A single connection meets the tip, and multiple connections on one side spread along the outline. The router reserves the bounding rectangle for other edges.
+
+```json
+{"id":"review","kind":"diamond","x":260,"y":180,"width":180,"height":88,"label":"需要人工复核？"}
+```
+
 ```xml
 <!-- cx/cy = center, hw = half-width, hh = half-height -->
 <polygon points="cx,cy-hh  cx+hw,cy  cx,cy+hh  cx-hw,cy"

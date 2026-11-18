@@ -615,6 +615,38 @@ def bounds_inside_canvas(bounds: Bounds, canvas: Bounds, epsilon: float = 1e-5) 
     )
 
 
+def check_diamond_connection(
+    edge: ET.Element, routes: list[list[Point]], node: ET.Element, bounds: Bounds,
+) -> list[str]:
+    half_width = (bounds.right - bounds.left) / 2
+    half_height = (bounds.bottom - bounds.top) / 2
+    if not half_width or not half_height:
+        return [f"node_shape: {describe_element(node)} has degenerate diamond bounds"]
+    cx, cy = bounds.left + half_width, bounds.top + half_height
+    tolerance = 0.01 / half_width + 0.01 / half_height
+
+    def diamond_distance(point: Point) -> float:
+        return abs(point[0] - cx) / half_width + abs(point[1] - cy) / half_height
+
+    def crosses_diamond(start: Point, end: Point) -> bool:
+        # On an orthogonal segment the nearest point clamps the center to its span.
+        x = max(min(cx, max(start[0], end[0])), min(start[0], end[0]))
+        y = max(min(cy, max(start[1], end[1])), min(start[1], end[1]))
+        return diamond_distance((x, y)) < 1 - tolerance
+
+    node_id = node.get("data-node-id")
+    terminals = [index for index, name in ((0, "data-source"), (-1, "data-target")) if edge.get(name) == node_id]
+    rendered_routes = [route for route in routes if len(route) >= 2]
+    edge_name, node_name = describe_element(edge), describe_element(node)
+    details = []
+    for terminal in terminals:
+        if abs(diamond_distance(rendered_routes[terminal][terminal]) - 1) > tolerance:
+            details.append(f"edge_anchor: {edge_name} does not meet the outline of {node_name}")
+    if any(crosses_diamond(first, second) for route in rendered_routes for first, second in zip(route, route[1:])):
+        details.append(f"edge_node: {edge_name} intersects {node_name}")
+    return details
+
+
 def geometry_check(root: ET.Element) -> list[str]:
     """Audit generated business geometry using explicit semantic SVG roles."""
 
@@ -674,11 +706,14 @@ def geometry_check(root: ET.Element) -> list[str]:
         ):
             details.append(f"non_orthogonal: {edge_name}")
         for obstacle_context, bounds in obstacles:
-            obstacle_node_id = obstacle_context.element.get("data-node-id", "")
+            obstacle = obstacle_context.element
+            obstacle_node_id = obstacle.get("data-node-id", "")
             if obstacle_node_id and obstacle_node_id in {
                 edge.get("data-source", ""),
                 edge.get("data-target", ""),
             }:
+                if obstacle.get("data-graph-shape") == "diamond":
+                    details.extend(check_diamond_connection(edge, routes, obstacle, bounds))
                 continue
             if any(
                 segment_hits_bounds(first, second, bounds)
